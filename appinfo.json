@@ -1,0 +1,17 @@
+{
+  "uuid": "14683333-c12a-451d-ad88-307d8a7e8384",
+  "shortName": "metrogome",
+  "longName": "metrogome",
+  "companyName": "MakeAwesomeHappen",
+  "versionCode": 1,
+  "versionLabel": "1.0.0",
+  "watchapp": {
+    "watchface": false
+  },
+  "appKeys": {
+    "dummy": 0
+  },
+  "resources": {
+    "media": []
+  }
+}
