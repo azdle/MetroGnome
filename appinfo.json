@@ -1,16 +1,21 @@
 {
   "uuid": "14683333-c12a-451d-ad88-307d8a7e8384",
-  "shortName": "metrogome",
-  "longName": "metrogome",
-  "companyName": "MakeAwesomeHappen",
+  "shortName": "MetroGnome",
+  "longName": "MetroGnome Transit",
+  "companyName": "Patrick Barrett",
   "versionCode": 1,
-  "versionLabel": "1.0.0",
+  "versionLabel": "0.0.1",
   "watchapp": {
     "watchface": false
   },
   "appKeys": {
-    "dummy": 0
+    "fatalErrorMessage": 0,
+    "getNearestStops": 1,
+    "listNearestStops": 2,
+    "getStopTimes": 3,
+    "listStopTimes": 4
   },
+  "capabilities": [ "location" ],
   "resources": {
     "media": []
   }
