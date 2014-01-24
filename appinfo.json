@@ -10,19 +10,31 @@
   },
   "appKeys": {
     "statusMessage": 0,
-    "getNearestStops": 10,
-    "listNearestStopsReset": 11,
-    "listNearestStopsSiteId": 12,
-    "listNearestStopsLocation": 13,
-    "listNearestStopsRoutes": 14,
+
+    "getStops": 10,
+    "listStopsReset": 11,
+    "listStopsSiteId": 12,
+    "listStopsLocation": 13,
+    "listStopsRoutes": 14,
+    "listStopsIsFavorite": 15,
+
     "getStopTimes": 20,
     "listStopTimesReset": 21,
     "listStopTimesBlock": 22,
     "listStopTimesRoute": 23,
-    "listStopTimesDepart": 24
+    "listStopTimesDepart": 24,
+
+    "addToFavorites": 41,
+    "removeFavorites": 42
   },
   "capabilities": [ "location" ],
   "resources": {
-    "media": []
+    "media": [
+      {
+        "type": "png",
+        "name": "IMAGE_MENU_ICON_CHECK_MARK",
+        "file": "images/menu_icon_check.png"
+      }
+    ]
   }
 }

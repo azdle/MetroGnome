@@ -14,6 +14,7 @@ typedef struct {
 	int site_id;
 	char location[MAX_STOP_LOCATION_LENGTH];
 	char routes[MAX_STOP_ROUTES_LENGTH];
+	bool is_favorite;
 } StopItem;
 
 static void handle_stops_message(DictionaryIterator*);
@@ -21,6 +22,8 @@ static void handle_times_message(DictionaryIterator*);
 
 static StopItem* get_stop_list_item_at_index(int index);
 static void init_stop_times(StopItem* stop);
+static void stop_add_favorite(StopItem* stop);
+static void stop_del_favorite(StopItem* stop);
 
 //////////////////////////////////////////////////////////////////////
 //
@@ -66,21 +69,31 @@ static void log_msg_error(AppMessageResult ret){
 enum {
 	STATUS_MESSAGE = 0,
 
-	GET_NEAREST_STOPS = 10,
-	LIST_NEAREST_STOPS_RESET = 11,
-	LIST_NEAREST_STOPS_SITE_ID = 12,
-	LIST_NEAREST_STOPS_LOCATION = 13,
-	LIST_NEAREST_STOPS_ROUTES = 14,
+	GET_STOPS = 10,
+	LIST_STOPS_RESET = 11,
+	LIST_STOPS_SITE_ID = 12,
+	LIST_STOPS_LOCATION = 13,
+	LIST_STOPS_ROUTES = 14,
+	LIST_STOPS_IS_FAVORITE = 15,
 
 	GET_STOP_TIMES = 20,
 	LIST_STOP_TIMES_RESET = 21,
 	LIST_STOP_TIMES_BLOCK = 22,
 	LIST_STOP_TIMES_ROUTE = 23,
 	LIST_STOP_TIMES_DEPART = 24,
+
+	ADD_FAVORITE_STOP = 41,
+	DEL_FAVORITE_STOP = 42,
+};
+
+enum {
+	NEARBY = 0,
+	FAVORITES = 1,
 };
 
 
 static void out_failed_handler(DictionaryIterator *failed, AppMessageResult reason, void *context) {
+	APP_LOG(APP_LOG_LEVEL_INFO, "Error in `out_failed_handler':");
 	log_msg_error(reason);
 }
 
@@ -88,7 +101,7 @@ static void out_sent_handler(DictionaryIterator *sent, void *context) {
 }
 
 static void in_received_handler(DictionaryIterator *received, void *context) {
-	Tuple *stops_tuple = dict_find(received, GET_NEAREST_STOPS);
+	Tuple *stops_tuple = dict_find(received, GET_STOPS);
 	Tuple *times_tuple = dict_find(received, GET_STOP_TIMES);
 
 	// If message is a grouping, let it be handled by custom handler.
@@ -114,6 +127,7 @@ static void in_received_handler(DictionaryIterator *received, void *context) {
 }
 
 static void in_dropped_handler(AppMessageResult reason, void *context) {
+	APP_LOG(APP_LOG_LEVEL_INFO, "Error in `in_dropped_handler':");
 	log_msg_error(reason);
 }
 
@@ -124,6 +138,7 @@ static void in_dropped_handler(AppMessageResult reason, void *context) {
 //
 //////////////////////////////////////////////////////////////////////
 
+GBitmap* check_mark;
 
 static StopItem stop_list_items[MAX_STOP_LIST_ITEMS];
 static int stop_list_count = 0;
@@ -146,15 +161,22 @@ static uint16_t stops_menu_get_num_rows_callback(MenuLayer *menu_layer, uint16_t
 }
 
 static void stops_menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuIndex *cell_index, void *data) {
+	GBitmap* icon = NULL;
+
 	switch (cell_index->section) {
 		// Should only be one section
 		case 0:
 			if(cell_index->row < stop_list_count) {
+
+				if(stop_list_items[cell_index->row].is_favorite){
+					icon = check_mark;
+				}
+
 				menu_cell_basic_draw(ctx,
 				                     cell_layer,
 				                     stop_list_items[cell_index->row].location,
 				                     stop_list_items[cell_index->row].routes,
-				                     NULL);
+				                     icon);
 
 			}else if(stop_list_count == 0 && cell_index->row == 0){
 				// TODO: Add status variable and update the loading text below with
@@ -175,8 +197,27 @@ static void stops_menu_select_callback(MenuLayer *menu_layer, MenuIndex *cell_in
 	}
 
 }
+// Here we capture when a user selects a menu item
+static void stops_menu_select_long_callback(MenuLayer *menu_layer, MenuIndex *cell_index, void *data) {
+	StopItem* stop;
+
+	// Show Stop if Exists
+	if( (stop = get_stop_list_item_at_index(cell_index->row)) != NULL) {
+		if(stop->is_favorite == false){
+			stop_add_favorite(stop);
+			stop->is_favorite = true;
+		}else{
+			stop_del_favorite(stop);
+			stop->is_favorite = false;
+		}
+		menu_layer_reload_data(menu_layer);
+	}
+
+}
 
 static void stops_window_load(Window *window) {
+	check_mark = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_MENU_ICON_CHECK_MARK);
+
 	Layer *window_layer = window_get_root_layer(stops_window);
 	GRect bounds = layer_get_frame(window_layer);
 
@@ -187,6 +228,7 @@ static void stops_window_load(Window *window) {
 		.get_num_rows = stops_menu_get_num_rows_callback,
 		.draw_row = stops_menu_draw_row_callback,
 		.select_click = stops_menu_select_callback,
+		.select_long_click = stops_menu_select_long_callback,
 	});
 
 	menu_layer_set_click_config_onto_window(stops_menu_layer, stops_window);
@@ -195,6 +237,7 @@ static void stops_window_load(Window *window) {
 }
 
 static void stops_window_unload(Window *window) {
+	gbitmap_destroy(check_mark);
 	menu_layer_destroy(stops_menu_layer);
 }
 
@@ -206,14 +249,16 @@ static StopItem* get_stop_list_item_at_index(int index) {
 	return &stop_list_items[index];
 }
 
-static void stops_append_location(int site_id, char* location, char* routes) {
+static void stops_append_location(int site_id, char* location, char* routes, bool is_favorite) {
 	if (stop_list_count >= MAX_STOP_LIST_ITEMS) { 
 		return;
 	}
 
 	stop_list_items[stop_list_count].site_id = site_id;
 	strncpy(stop_list_items[stop_list_count].location, location, MAX_STOP_LOCATION_LENGTH);
-	strncpy(stop_list_items[stop_list_count++].routes, routes, MAX_STOP_ROUTES_LENGTH);
+	strncpy(stop_list_items[stop_list_count].routes, routes, MAX_STOP_ROUTES_LENGTH);
+	stop_list_items[stop_list_count++].is_favorite = is_favorite;
+
 
 	num_stops_menu_items[0] = stop_list_count;
 	menu_layer_reload_data(stops_menu_layer); 
@@ -221,24 +266,26 @@ static void stops_append_location(int site_id, char* location, char* routes) {
 
 static void handle_stops_message(DictionaryIterator* received){
 	// Check for fields you expect to receive
-	Tuple *reset_tuple = dict_find(received, LIST_NEAREST_STOPS_RESET);
-	Tuple *site_id_tuple = dict_find(received, LIST_NEAREST_STOPS_SITE_ID);
-	Tuple *location_tuple = dict_find(received, LIST_NEAREST_STOPS_LOCATION);
-	Tuple *routes_tuple = dict_find(received, LIST_NEAREST_STOPS_ROUTES);
+	Tuple *reset_tuple = dict_find(received, LIST_STOPS_RESET);
+	Tuple *site_id_tuple = dict_find(received, LIST_STOPS_SITE_ID);
+	Tuple *location_tuple = dict_find(received, LIST_STOPS_LOCATION);
+	Tuple *routes_tuple = dict_find(received, LIST_STOPS_ROUTES);
+	Tuple *is_favorite_tuple = dict_find(received, LIST_STOPS_IS_FAVORITE);
 
 	if (reset_tuple) {
 		stop_list_count = 0;
 	}else if (site_id_tuple && location_tuple && routes_tuple) {
 		stops_append_location(site_id_tuple->value->int32,
 													location_tuple->value->cstring,
-													routes_tuple->value->cstring);
+													routes_tuple->value->cstring,
+													is_favorite_tuple->value->int8);
 	}else{
 		// Check for unexpected fields.
 		Tuple* message_tuple = dict_read_first(received);
 
 		while (message_tuple) {
 			switch (message_tuple->key) {
-				case  GET_NEAREST_STOPS:
+				case  GET_STOPS:
 					break;
 				default:
 					APP_LOG(APP_LOG_LEVEL_INFO, "Unknown Message Type");
@@ -248,20 +295,44 @@ static void handle_stops_message(DictionaryIterator* received){
 	}
 }
 
-// For Main Menu to Start The "Find Me" Process that results in a list
-// of near-by stops. 
-// TODO: Make this a more generic call and move the callback
-//       to be with the rest of the code.
-static void stops_option_callback(int index, void *ctx) {
-	// Reset counter values to prevent old data being shown.
-	num_stops_menu_items[0] = 1;
-	stop_list_count = 0;
-
+static void stop_add_favorite(StopItem* stop){
 	// Send Message to Get Nearest Stops
 	DictionaryIterator *msg_dict;
 	app_message_outbox_begin(&msg_dict);
 
-	Tuplet value = TupletInteger(GET_NEAREST_STOPS, 0);
+	Tuplet favorite = TupletInteger(ADD_FAVORITE_STOP, stop->site_id);
+	dict_write_tuplet(msg_dict, &favorite);
+
+	AppMessageResult ret = app_message_outbox_send();
+	log_msg_error(ret);
+
+}
+
+static void stop_del_favorite(StopItem* stop){
+	// Send Message to Get Nearest Stops
+	DictionaryIterator *msg_dict;
+	app_message_outbox_begin(&msg_dict);
+
+	Tuplet favorite = TupletInteger(DEL_FAVORITE_STOP, stop->site_id);
+	dict_write_tuplet(msg_dict, &favorite);
+
+	AppMessageResult ret = app_message_outbox_send();
+	log_msg_error(ret);
+
+}
+
+
+// External Call to Start the Process to Show Favorite Stops
+static void stops_show_favorites() {
+	// Reset counter values to prevent old data being shown.
+	num_stops_menu_items[0] = 1;
+	stop_list_count = 0;
+
+	// Send Message to Get Favorite Stops
+	DictionaryIterator *msg_dict;
+	app_message_outbox_begin(&msg_dict);
+
+	Tuplet value = TupletInteger(GET_STOPS, FAVORITES);
 	dict_write_tuplet(msg_dict, &value);
 
 	AppMessageResult ret = app_message_outbox_send();
@@ -276,6 +347,30 @@ static void stops_option_callback(int index, void *ctx) {
 	window_stack_push(stops_window, ANIMATED);
 }
 
+// External Call to Start the Process to Show Favorite Stops
+static void stops_show_nearby() {
+	// Reset counter values to prevent old data being shown.
+	num_stops_menu_items[0] = 1;
+	stop_list_count = 0;
+
+	// Send Message to Get Nearest Stops
+	DictionaryIterator *msg_dict;
+	app_message_outbox_begin(&msg_dict);
+
+	Tuplet value = TupletInteger(GET_STOPS, NEARBY);
+	dict_write_tuplet(msg_dict, &value);
+
+	AppMessageResult ret = app_message_outbox_send();
+	log_msg_error(ret);
+
+	// Load New Window
+	stops_window = window_create();
+	window_set_window_handlers(stops_window, (WindowHandlers) {
+		.load = stops_window_load,
+		.unload = stops_window_unload,
+	});
+	window_stack_push(stops_window, ANIMATED);
+}
 
 //////////////////////////////////////////////////////////////////////
 //
@@ -470,17 +565,26 @@ static SimpleMenuItem main_menu_items[4];
 static SimpleMenuSection main_menu_sections[1];
 static SimpleMenuLayer* main_menu_layer;
 
+static void main_menu_find_me_callback(int index, void *ctx) {
+	stops_show_nearby();
+}
+
+static void main_menu_favorites_callback(int index, void *ctx) {
+	stops_show_favorites();
+}
+
 static void main_window_load(Window *main_window) {
 	int num_a_items = 0;
 
 	main_menu_items[num_a_items++] = (SimpleMenuItem){
 		.title = "Find Me",
-		.callback = stops_option_callback,
+		.callback = main_menu_find_me_callback,
 	};
-/*
 	main_menu_items[num_a_items++] = (SimpleMenuItem){
 		.title = "Favorite Stops",
+		.callback = main_menu_favorites_callback,
 	};
+/*
 	main_menu_items[num_a_items++] = (SimpleMenuItem){
 		.title = "Options",
 	};

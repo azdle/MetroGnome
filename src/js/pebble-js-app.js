@@ -4,7 +4,7 @@ var geo_options = {
 	timeout           : 2000
 };
 
-var wpid,nearestStopId;
+var wpid,favorite_stops;
 
 var lastGeo = {};
 
@@ -61,6 +61,18 @@ Pebble.addEventListener("ready",
 			console.log("Geolocation Not Availalbe");
 			Pebble.sendAppMessage({ "statusMessage": "Geolocation Not Available" });
 		}
+
+		var favorites_stops_s = window.localStorage.getItem("favorite_stops");
+		console.log("favorite_stops: " + favorites_stops_s)
+		if(favorites_stops_s !== null){
+			try{
+				favorite_stops = JSON.parse(favorites_stops_s);
+			}catch(e){
+				favorite_stops = [];
+			}
+		}else{
+			favorite_stops = [];
+		}
 	}
 );
 
@@ -106,6 +118,53 @@ function fetchNearestStops(CoordUTM){
 	return stops;
 }
 
+function fetchFavoriteStops(stopIds){
+	var baseUrl = "https://arcgis.metc.state.mn.us/arcgis/rest/services/transit/TIM_Points/MapServer/1/query?"
+
+	var parameters = {};
+	parameters["where"] = "site_id in (" + stopIds.join(",") + ")"
+	parameters["geometry"] = "{xmin:409675, ymin:4948387, xmax:515310, ymax:5045828}"
+	parameters["geometryType"] = "esriGeometryEnvelope";
+	parameters["geometryPrecision"] = 0;
+	parameters["outFields"] = "site_on,site_at,site_id,ROUTES,CORN_DESC,ROUTEDIRS";
+	parameters["returnGeometry"] = true;
+	parameters["returnIdsOnly"] = false;
+	parameters["returnCountOnly"] = false;
+	parameters["f"] = "json";
+
+	console.log("QUerying: "+baseUrl + constructURIParameters(parameters))
+
+	var req = new XMLHttpRequest();
+	req.open('GET',baseUrl + constructURIParameters(parameters),false);
+	req.send(null);
+
+	if (req.readyState == 4) {
+		if(req.status == 200) {
+			try{
+				var response = JSON.parse(req.responseText);
+			}catch(e){
+				console.error("Result Not JSON");
+				return;
+			}
+
+			try{
+				var stops = response.features;
+			}catch(e){
+				console.warn("No Stops Returned");
+				console.warn(e);
+				Pebble.sendAppMessage({ "statusMessage": "No Stops Found" });
+				return;
+			}
+		}else{
+			console.warn("HTTP Error: " + req.status);
+		}
+	}else{
+		console.warn("Ready State Error");
+	}
+
+	return stops;
+}
+
 function fetchStopTimes(stopNumber){
 	var req = new XMLHttpRequest();
 	req.open('GET','http://svc.metrotransit.org/NexTrip/' + stopNumber + '?format=json',false);
@@ -136,15 +195,20 @@ function fetchStopTimes(stopNumber){
 Pebble.addEventListener("appmessage",
 	function(e) {
 
-		if(e.payload.statusMessage != undefined){
+		if(e.payload.statusMessage !== undefined){
 			console.error("Status: " + e.payload.statusMessage);
 		};
 
-		if(e.payload.getNearestStops != undefined){
-			console.log("Get Nearest Stops: " + e.payload.getNearestStops);
+		if(e.payload.getStops !== undefined){
+			console.log("Get Stops: " + e.payload.getStops);
 
-			var stops = fetchNearestStops(lastGeo);
-			sendStopLocation(stops);
+			if(e.payload.getStops === 0){
+				var stops = fetchNearestStops(lastGeo);
+				sendStopLocation(stops);
+			}else if(e.payload.getStops === 1){
+				var stops = fetchFavoriteStops(favorite_stops);
+				sendStopLocation(stops);
+			}
 		};
 
 		if(e.payload.getStopTimes !== undefined){
@@ -156,7 +220,27 @@ Pebble.addEventListener("appmessage",
 			sendStopTime(stopTimes);
 		};
 
-		if(e.payload.placeholder != undefined){
+		if(e.payload.addToFavorites !== undefined){
+			console.log("Add Favorite: " + e.payload.addToFavorites);
+			if(favorite_stops.indexOf(e.payload.addToFavorites) === -1){
+				favorite_stops.push(e.payload.addToFavorites);
+
+				window.localStorage.setItem("favorite_stops", JSON.stringify(favorite_stops));
+			}
+		};
+
+		if(e.payload.removeFavorites !== undefined){
+			console.log("Remove Favorite: " + e.payload.removeFavorites);
+
+			var index = favorite_stops.indexOf(e.payload.removeFavorites)
+
+			if(index >= 0){
+				favorite_stops.splice(index, 1);
+				window.localStorage.setItem("favorite_stops", JSON.stringify(favorite_stops));
+			}
+		};
+
+		if(e.payload.placeholder !== undefined){
 			console.log("Message: " + e.payload.placeholder);
 		};
 
@@ -175,10 +259,11 @@ var numStopsSent = 0;
 var stopsToSend = {};
 
 function sendStopLocation(stops){
+	console.log(stops)
 	numStopsSent = 0;
 	stopsToSend = stops;
-	Pebble.sendAppMessage({ "getNearestStops": 1,
-	                        "listNearestStopsReset": 0},
+	Pebble.sendAppMessage({ "getStops": 1,
+	                        "listStopsReset": 0},
 	                      sendStopLocationContinue,
 	                      sendStopLocationError);
 }
@@ -186,9 +271,18 @@ function sendStopLocation(stops){
 function sendStopLocationContinue(data){
 	//data.transactionId
 
-    if(numStopsSent >= 10){
-        return;
-    }
+	if(stopsToSend.length === 0){
+		Pebble.sendAppMessage({ "getStops": 1,
+	                            "listStopsSiteId": 0,
+	                            "listStopsLocation": "No Stops Found",
+	                            "listStopsRoutes": "Please Close and Re-Open the App",
+	                            "listStopsIsFavorite": 0});
+		return;
+	}
+
+	if(numStopsSent >= 10 || numStopsSent >= stopsToSend.length){
+		return;
+	}
 
 	var site_id = stopsToSend[numStopsSent].attributes.site_id;
 	var location = stopsToSend[numStopsSent].attributes.site_on.trim() + "&" +
@@ -197,11 +291,13 @@ function sendStopLocationContinue(data){
 	var routes = stopsToSend[numStopsSent].attributes.ROUTEDIRS;
 
 	numStopsSent = numStopsSent + 1;
+	console.log(numStopsSent);
 
-	Pebble.sendAppMessage({ "getNearestStops": 1,
-	                        "listNearestStopsSiteId": site_id,
-	                        "listNearestStopsLocation": location,
-	                        "listNearestStopsRoutes": routes},
+	Pebble.sendAppMessage({ "getStops": 1,
+	                        "listStopsSiteId": site_id,
+	                        "listStopsLocation": location,
+	                        "listStopsRoutes": routes,
+	                        "listStopsIsFavorite": isInNum(site_id, favorite_stops)},
 	                      sendStopLocationContinue,
 	                      sendStopLocationError);
 }
@@ -218,7 +314,7 @@ function sendStopTime(times){
 	numTimesSent = 0;
 	timesToSend = times;
 	Pebble.sendAppMessage({"getStopTimes": 0,
-	                       "listNearestStopsReset": 0},
+	                       "listStopsReset": 0},
 	                      sendStopTimeContinue,
 	                      sendStopTimeError);
 }
@@ -226,7 +322,15 @@ function sendStopTime(times){
 function sendStopTimeContinue(data){
 	//data.transactionId
 
-	if(numTimesSent >= 10){
+	if(timesToSend.length === 0){
+		Pebble.sendAppMessage({"getStopTimes": 0,
+	                       "listStopTimesRoute": "No Times Found", 
+	                       "listStopTimesDepart": "Try a different stop, maybe?", 
+	                       "listStopTimesBlock": 0});
+		return;
+	}
+
+	if(numTimesSent >= 10 || numTimesSent >= timesToSend.length){
 		return;
 	}
 
@@ -252,6 +356,13 @@ function sendStopTimeError(data){
 	console.error("Couldn't Send Times, Failing")
 }
 
+function isInNum(name, container){
+	if(container.indexOf(name) >= 0){
+		return 1;
+	}else{
+		return 0;
+	}
+}
 
 
 
