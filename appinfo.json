@@ -9,11 +9,17 @@
     "watchface": false
   },
   "appKeys": {
-    "fatalErrorMessage": 0,
-    "getNearestStops": 1,
-    "listNearestStops": 2,
-    "getStopTimes": 3,
-    "listStopTimes": 4
+    "statusMessage": 0,
+    "getNearestStops": 10,
+    "listNearestStopsReset": 11,
+    "listNearestStopsSiteId": 12,
+    "listNearestStopsLocation": 13,
+    "listNearestStopsRoutes": 14,
+    "getStopTimes": 20,
+    "listStopTimesReset": 21,
+    "listStopTimesBlock": 22,
+    "listStopTimesRoute": 23,
+    "listStopTimesDepart": 24
   },
   "capabilities": [ "location" ],
   "resources": {

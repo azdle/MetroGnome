@@ -1,7 +1,7 @@
 var geo_options = {
-  enableHighAccuracy: true,
-  maximumAge        : 120000,
-  timeout           : 27000
+	enableHighAccuracy: false,
+	maximumAge        : 30000,
+	timeout           : 2000
 };
 
 var wpid,nearestStopId;
@@ -9,19 +9,24 @@ var wpid,nearestStopId;
 var lastGeo = {};
 
 if (!String.prototype.trim) {
-  String.prototype.trim = function () {
-    return this.replace(/^\s+|\s+$/gm, '');
-  };
+	String.prototype.trim = function () {
+		return this.replace(/^\s+|\s+$/gm, '');
+	};
 }
 
-function geo_success(position) {
-  console.log("GeoLocation Position: " + position.coords.latitude + "," + position.coords.longitude);
-  lastGeo = LatLonDegToUTMXY(position.coords.latitude,position.coords.longitude, 15)
-  console.log("X: " + lastGeo.x + " Y: " + lastGeo.y)
+function geo_success(position, callback) {
+	console.log("GeoLocation Position: " + position.coords.latitude + "," + position.coords.longitude);
+	lastGeo = LatLonDegToUTMXY(position.coords.latitude,position.coords.longitude, 15)
+	console.log("X: " + lastGeo.x + " Y: " + lastGeo.y)
+
+	if(callback !== undefined){
+		callback(position)
+	}
 }
 
 function geo_error() {
-  console.log("GeoLocation Position not Available");
+	console.log("GeoLocation Position not Available");
+	Pebble.sendAppMessage({ "statusMessage": "Geolocation Not Available" });
 }
 
 function constructURIParameters(parameters){
@@ -34,7 +39,7 @@ function constructURIParameters(parameters){
 }
 
 function fixedEncodeURIComponent (str) {
-  return encodeURIComponent(str).replace(/[!'()]/g,escape).replace(/\*/g,"%2A");
+	return encodeURIComponent(str).replace(/[!'()]/g,escape).replace(/\*/g,"%2A");
 }
 
 function createEnvlopeString(x, y, delta){
@@ -51,105 +56,107 @@ Pebble.addEventListener("ready",
 		console.log("Starting GPS Watch Position");	
 
 		if ("geolocation" in navigator) {
-		  wpid = navigator.geolocation.getCurrentPosition(geo_success,geo_error,geo_options);
+			wpid = navigator.geolocation.getCurrentPosition(geo_success,geo_error,geo_options);
 		} else {
-		  console.log("Geolocation Not Availalbe");
-		  Pebble.sendAppMessage({ "fatalErrorMessage": "Geolocation Not Available" });
+			console.log("Geolocation Not Availalbe");
+			Pebble.sendAppMessage({ "statusMessage": "Geolocation Not Available" });
 		}
 	}
 );
 
-/*Pebble.addEventListener("appmessage",
-  function(e) {
-    console.log("Received message: " + e.payload);
-  }
-);*/
+function fetchNearestStops(CoordUTM){
+	var baseUrl = "https://arcgis.metc.state.mn.us/arcgis/rest/services/transit/TIM_Points/MapServer/1/query?"
+
+	var parameters = {};
+	parameters["geometry"] = createEnvlopeString(CoordUTM.x, CoordUTM.y, 100);
+	parameters["geometryType"] = "esriGeometryEnvelope";
+	parameters["geometryPrecision"] = 0;
+	parameters["outFields"] = "site_on,site_at,site_id,ROUTES,CORN_DESC,ROUTEDIRS";
+	parameters["returnGeometry"] = true;
+	parameters["returnIdsOnly"] = false;
+	parameters["returnCountOnly"] = false;
+	parameters["f"] = "json";
+
+	var req = new XMLHttpRequest();
+	req.open('GET',baseUrl + constructURIParameters(parameters),false);
+	req.send(null);
+
+	if (req.readyState == 4) {
+		if(req.status == 200) {
+			try{
+				var response = JSON.parse(req.responseText);
+			}catch(e){
+				console.error("Result Not JSON");
+				return;
+			}
+
+			try{
+				var stops = response.features;
+			}catch(e){
+				console.warn("No Stops Returned");
+				console.warn(e);
+				Pebble.sendAppMessage({ "statusMessage": "No Stops Found" });
+				return;
+			}
+		}else{
+			console.log("HTTP Error: " + req.status);
+		}
+	}
+
+	return stops;
+}
+
+function fetchStopTimes(stopNumber){
+	var req = new XMLHttpRequest();
+	req.open('GET','http://svc.metrotransit.org/NexTrip/' + stopNumber + '?format=json',false);
+	req.send(null);
+
+	if (req.readyState == 4) {
+		if(req.status == 200) {
+			try{
+				var response = JSON.parse(req.responseText);
+			}catch(e){
+				console.error("Result Not JSON");
+				return;
+			}
+
+			try{
+				return response;
+			}catch(e){
+				console.warn("No Routes Returned");
+				Pebble.sendAppMessage({ "statusMessage": "No Routes Returned" });
+				return;
+			}
+		}else{
+			console.log("HTTP Error: " + req.status);
+		}
+	}
+}
 
 Pebble.addEventListener("appmessage",
 	function(e) {
 
-		if(e.payload.fatalErrorMessage){
-			console.error("Fatal Error: " + e.payload.fatalErrorMessage);
+		if(e.payload.statusMessage != undefined){
+			console.error("Status: " + e.payload.statusMessage);
 		};
 
-		if(e.payload.getNearestStops){
+		if(e.payload.getNearestStops != undefined){
 			console.log("Get Nearest Stops: " + e.payload.getNearestStops);
 
-			var baseUrl = "https://arcgis.metc.state.mn.us/arcgis/rest/services/transit/TIM_Points/MapServer/1/query?"
-
-			var parameters = {};
-			parameters["geometry"] = createEnvlopeString(lastGeo.x, lastGeo.y, 100);
-			parameters["geometryType"] = "esriGeometryEnvelope";
-			parameters["geometryPrecision"] = 0;
-			parameters["outFields"] = "site_on,site_at,site_id,ROUTES,CORN_DESC,ROUTEDIRS";
-			parameters["returnGeometry"] = true;
-			parameters["returnIdsOnly"] = false;
-			parameters["returnCountOnly"] = false;
-			parameters["f"] = "json";
-
-			var req = new XMLHttpRequest();
-			req.open('GET',baseUrl + constructURIParameters(parameters),false);
-			req.send(null);
-
-			if (req.readyState == 4) {
-				if(req.status == 200) {
-					try{
-						var response = JSON.parse(req.responseText);
-					}catch(e){
-						console.error("Result Not JSON");
-						return;
-					}
-
-					try{
-						var stops = response.features;
-						console.log(stops[0])
-						for(i in stops){
-							Pebble.sendAppMessage({ "listNearestStops": stops[i].attributes.site_on.trim() + "&" + stops[i].attributes.site_at.trim() +  " (" + stops[i].attributes.CORN_DESC.trim() +  ")"});
-						}
-					}catch(e){
-						console.warn("No Stops Returned");
-						console.warn(e);
-						Pebble.sendAppMessage({ "fatalErrorMessage": "No Stops Found" });
-						return;
-					}
-				}else{
-					console.log("HTTP Error: " + req.status);
-				}
-			}
+			var stops = fetchNearestStops(lastGeo);
+			sendStopLocation(stops);
 		};
 
-		if(e.payload.getStopTimes){
+		if(e.payload.getStopTimes !== undefined){
 			console.log("Get Stop Times: " + e.payload.getStopTimes);
 
 			var stopNumber = e.payload.getStopTimes;
+			var stopTimes = fetchStopTimes(stopNumber)
 
-			var req = new XMLHttpRequest();
-			req.open('GET','http://svc.metrotransit.org/NexTrip/' + stopNumber + '?format=json',false);
-			req.send(null);
-
-			if (req.readyState == 4) {
-				if(req.status == 200) {
-					try{
-						var response = JSON.parse(req.responseText);
-					}catch(e){
-						console.error("Result Not JSON");
-						return;
-					}
-
-					try{
-						Pebble.sendAppMessage({ "listStopTimes": response[0]['DepartureText'] });
-					}catch(e){
-						console.warn("No Routes Returned");
-						Pebble.sendAppMessage({ "fatalErrorMessage": "No Routes Returned" });
-						return;
-					}
-				}else{
-					console.log("HTTP Error: " + req.status);
-				}
-			}
+			sendStopTime(stopTimes);
 		};
 
-		if(e.payload.placeholder){
+		if(e.payload.placeholder != undefined){
 			console.log("Message: " + e.payload.placeholder);
 		};
 
@@ -163,6 +170,97 @@ Pebble.addEventListener("appmessage",
 	}
 );
 
+//TODO: Make this not a global. Make the Following functions more functional.
+var numStopsSent = 0;
+var stopsToSend = {};
+
+function sendStopLocation(stops){
+	numStopsSent = 0;
+	stopsToSend = stops;
+	Pebble.sendAppMessage({ "getNearestStops": 1,
+	                        "listNearestStopsReset": 0},
+	                      sendStopLocationContinue,
+	                      sendStopLocationError);
+}
+
+function sendStopLocationContinue(data){
+	//data.transactionId
+
+    if(numStopsSent >= 10){
+        return;
+    }
+
+	var site_id = stopsToSend[numStopsSent].attributes.site_id;
+	var location = stopsToSend[numStopsSent].attributes.site_on.trim() + "&" +
+	               stopsToSend[numStopsSent].attributes.site_at.trim() +
+	               " (" + stopsToSend[numStopsSent].attributes.CORN_DESC.trim() +  ")";
+	var routes = stopsToSend[numStopsSent].attributes.ROUTEDIRS;
+
+	numStopsSent = numStopsSent + 1;
+
+	Pebble.sendAppMessage({ "getNearestStops": 1,
+	                        "listNearestStopsSiteId": site_id,
+	                        "listNearestStopsLocation": location,
+	                        "listNearestStopsRoutes": routes},
+	                      sendStopLocationContinue,
+	                      sendStopLocationError);
+}
+
+function sendStopLocationError(data){
+	//data.transactionId
+	console.error("Couldn't Send Stops, Failing")
+}
+
+var numTimesSent = 0;
+var timesToSend = {};
+
+function sendStopTime(times){
+	numTimesSent = 0;
+	timesToSend = times;
+	Pebble.sendAppMessage({"getStopTimes": 0,
+	                       "listNearestStopsReset": 0},
+	                      sendStopTimeContinue,
+	                      sendStopTimeError);
+}
+
+function sendStopTimeContinue(data){
+	//data.transactionId
+
+	if(numTimesSent >= 10){
+		return;
+	}
+
+	var route = timesToSend[numTimesSent]['Route'] +
+	            timesToSend[numTimesSent]['Terminal'] + " " +
+	            timesToSend[numTimesSent]['RouteDirection'];
+	var time = timesToSend[numTimesSent]['DepartureText'];
+	var block = timesToSend[numTimesSent]['BlockNumber'];
+
+	numTimesSent = numTimesSent + 1;
+
+	Pebble.sendAppMessage({"getStopTimes": 0,
+	                       "listStopTimesRoute": route, 
+	                       "listStopTimesDepart": time, 
+	                       "listStopTimesBlock": block},
+	                      sendStopTimeContinue,
+	                      sendStopTimeError);
+
+}
+
+function sendStopTimeError(data){
+	//data.transactionId
+	console.error("Couldn't Send Times, Failing")
+}
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////
+//
+//       UTM <->  WGS 84 (World Geodetic System) Conversions
+//
+//////////////////////////////////////////////////////////////////////
 
 
 var pi = 3.14159265358979;
@@ -183,7 +281,7 @@ var UTMScaleFactor = 0.9996;
 */
 function DegToRad (deg)
 {
-    return (deg / 180.0 * pi)
+	return (deg / 180.0 * pi)
 }
 
 
@@ -197,7 +295,7 @@ function DegToRad (deg)
 */
 function RadToDeg (rad)
 {
-    return (rad / pi * 180.0)
+	return (rad / pi * 180.0)
 }
 
 
@@ -225,37 +323,37 @@ function RadToDeg (rad)
 */
 function ArcLengthOfMeridian (phi)
 {
-    var alpha,beta,gamma,delta,epsilon,n;
-    var result;
+	var alpha,beta,gamma,delta,epsilon,n;
+	var result;
 
-    /* Precalculate n */
-    n = (sm_a - sm_b) / (sm_a + sm_b);
+	/* Precalculate n */
+	n = (sm_a - sm_b) / (sm_a + sm_b);
 
-    /* Precalculate alpha */
-    alpha = ((sm_a + sm_b) / 2.0)
-       * (1.0 + (Math.pow (n,2.0) / 4.0) + (Math.pow (n,4.0) / 64.0));
+	/* Precalculate alpha */
+	alpha = ((sm_a + sm_b) / 2.0)
+	   * (1.0 + (Math.pow (n,2.0) / 4.0) + (Math.pow (n,4.0) / 64.0));
 
-    /* Precalculate beta */
-    beta = (-3.0 * n / 2.0) + (9.0 * Math.pow (n,3.0) / 16.0)
-       + (-3.0 * Math.pow (n,5.0) / 32.0);
+	/* Precalculate beta */
+	beta = (-3.0 * n / 2.0) + (9.0 * Math.pow (n,3.0) / 16.0)
+	   + (-3.0 * Math.pow (n,5.0) / 32.0);
 
-    /* Precalculate gamma */
-    gamma = (15.0 * Math.pow (n,2.0) / 16.0)
-        + (-15.0 * Math.pow (n,4.0) / 32.0);
+	/* Precalculate gamma */
+	gamma = (15.0 * Math.pow (n,2.0) / 16.0)
+		+ (-15.0 * Math.pow (n,4.0) / 32.0);
 
-    /* Precalculate delta */
-    delta = (-35.0 * Math.pow (n,3.0) / 48.0)
-        + (105.0 * Math.pow (n,5.0) / 256.0);
+	/* Precalculate delta */
+	delta = (-35.0 * Math.pow (n,3.0) / 48.0)
+		+ (105.0 * Math.pow (n,5.0) / 256.0);
 
-    /* Precalculate epsilon */
-    epsilon = (315.0 * Math.pow (n,4.0) / 512.0);
+	/* Precalculate epsilon */
+	epsilon = (315.0 * Math.pow (n,4.0) / 512.0);
 
-/* Now calculate the sum of the series and return */
-result = alpha
-    * (phi + (beta * Math.sin (2.0 * phi))
-        + (gamma * Math.sin (4.0 * phi))
-        + (delta * Math.sin (6.0 * phi))
-        + (epsilon * Math.sin (8.0 * phi)));
+	/* Now calculate the sum of the series and return */
+	result = alpha
+		* (phi + (beta * Math.sin (2.0 * phi))
+		+ (gamma * Math.sin (4.0 * phi))
+		+ (delta * Math.sin (6.0 * phi))
+		+ (epsilon * Math.sin (8.0 * phi)));
 
 return result;
 }
@@ -278,11 +376,11 @@ return result;
 */
 function UTMCentralMeridian (zone)
 {
-    var cmeridian;
+	var cmeridian;
 
-    cmeridian = DegToRad (-183.0 + (zone * 6.0));
+	cmeridian = DegToRad (-183.0 + (zone * 6.0));
 
-    return cmeridian;
+	return cmeridian;
 }
 
 
@@ -305,42 +403,42 @@ function UTMCentralMeridian (zone)
 */
 function FootpointLatitude (y)
 {
-    var y_,alpha_,beta_,gamma_,delta_,epsilon_,n;
-    var result;
-    
-    /* Precalculate n (Eq. 10.18) */
-    n = (sm_a - sm_b) / (sm_a + sm_b);
-        
-    /* Precalculate alpha_ (Eq. 10.22) */
-    /* (Same as alpha in Eq. 10.17) */
-    alpha_ = ((sm_a + sm_b) / 2.0)
-        * (1 + (Math.pow (n,2.0) / 4) + (Math.pow (n,4.0) / 64));
-    
-    /* Precalculate y_ (Eq. 10.23) */
-    y_ = y / alpha_;
-    
-    /* Precalculate beta_ (Eq. 10.22) */
-    beta_ = (3.0 * n / 2.0) + (-27.0 * Math.pow (n,3.0) / 32.0)
-        + (269.0 * Math.pow (n,5.0) / 512.0);
-    
-    /* Precalculate gamma_ (Eq. 10.22) */
-    gamma_ = (21.0 * Math.pow (n,2.0) / 16.0)
-        + (-55.0 * Math.pow (n,4.0) / 32.0);
-        
-    /* Precalculate delta_ (Eq. 10.22) */
-    delta_ = (151.0 * Math.pow (n,3.0) / 96.0)
-        + (-417.0 * Math.pow (n,5.0) / 128.0);
-        
-    /* Precalculate epsilon_ (Eq. 10.22) */
-    epsilon_ = (1097.0 * Math.pow (n,4.0) / 512.0);
-        
-    /* Now calculate the sum of the series (Eq. 10.21) */
-    result = y_ + (beta_ * Math.sin (2.0 * y_))
-        + (gamma_ * Math.sin (4.0 * y_))
-        + (delta_ * Math.sin (6.0 * y_))
-        + (epsilon_ * Math.sin (8.0 * y_));
-    
-    return result;
+	var y_,alpha_,beta_,gamma_,delta_,epsilon_,n;
+	var result;
+	
+	/* Precalculate n (Eq. 10.18) */
+	n = (sm_a - sm_b) / (sm_a + sm_b);
+		
+	/* Precalculate alpha_ (Eq. 10.22) */
+	/* (Same as alpha in Eq. 10.17) */
+	alpha_ = ((sm_a + sm_b) / 2.0)
+		* (1 + (Math.pow (n,2.0) / 4) + (Math.pow (n,4.0) / 64));
+	
+	/* Precalculate y_ (Eq. 10.23) */
+	y_ = y / alpha_;
+	
+	/* Precalculate beta_ (Eq. 10.22) */
+	beta_ = (3.0 * n / 2.0) + (-27.0 * Math.pow (n,3.0) / 32.0)
+		+ (269.0 * Math.pow (n,5.0) / 512.0);
+	
+	/* Precalculate gamma_ (Eq. 10.22) */
+	gamma_ = (21.0 * Math.pow (n,2.0) / 16.0)
+		+ (-55.0 * Math.pow (n,4.0) / 32.0);
+		
+	/* Precalculate delta_ (Eq. 10.22) */
+	delta_ = (151.0 * Math.pow (n,3.0) / 96.0)
+		+ (-417.0 * Math.pow (n,5.0) / 128.0);
+		
+	/* Precalculate epsilon_ (Eq. 10.22) */
+	epsilon_ = (1097.0 * Math.pow (n,4.0) / 512.0);
+		
+	/* Now calculate the sum of the series (Eq. 10.21) */
+	result = y_ + (beta_ * Math.sin (2.0 * y_))
+		+ (gamma_ * Math.sin (4.0 * y_))
+		+ (delta_ * Math.sin (6.0 * y_))
+		+ (epsilon_ * Math.sin (8.0 * y_));
+	
+	return result;
 }
 
 
@@ -370,60 +468,60 @@ function FootpointLatitude (y)
 */
 function MapLatLonToXY (phi,lambda,lambda0)
 {
-    var N,nu2,ep2,t,t2,l;
-    var l3coef,l4coef,l5coef,l6coef,l7coef,l8coef;
-    var tmp;
-    var coord = {};
+	var N,nu2,ep2,t,t2,l;
+	var l3coef,l4coef,l5coef,l6coef,l7coef,l8coef;
+	var tmp;
+	var coord = {};
 
-    /* Precalculate ep2 */
-    ep2 = (Math.pow (sm_a,2.0) - Math.pow (sm_b,2.0)) / Math.pow (sm_b,2.0);
+	/* Precalculate ep2 */
+	ep2 = (Math.pow (sm_a,2.0) - Math.pow (sm_b,2.0)) / Math.pow (sm_b,2.0);
 
-    /* Precalculate nu2 */
-    nu2 = ep2 * Math.pow (Math.cos (phi),2.0);
+	/* Precalculate nu2 */
+	nu2 = ep2 * Math.pow (Math.cos (phi),2.0);
 
-    /* Precalculate N */
-    N = Math.pow (sm_a,2.0) / (sm_b * Math.sqrt (1 + nu2));
+	/* Precalculate N */
+	N = Math.pow (sm_a,2.0) / (sm_b * Math.sqrt (1 + nu2));
 
-    /* Precalculate t */
-    t = Math.tan (phi);
-    t2 = t * t;
-    tmp = (t2 * t2 * t2) - Math.pow (t,6.0);
+	/* Precalculate t */
+	t = Math.tan (phi);
+	t2 = t * t;
+	tmp = (t2 * t2 * t2) - Math.pow (t,6.0);
 
-    /* Precalculate l */
-    l = lambda - lambda0;
+	/* Precalculate l */
+	l = lambda - lambda0;
 
-    /* Precalculate coefficients for l**n in the equations below
-       so a normal human being can read the expressions for easting
-       and northing
-       -- l**1 and l**2 have coefficients of 1.0 */
-    l3coef = 1.0 - t2 + nu2;
+	/* Precalculate coefficients for l**n in the equations below
+	   so a normal human being can read the expressions for easting
+	   and northing
+	   -- l**1 and l**2 have coefficients of 1.0 */
+	l3coef = 1.0 - t2 + nu2;
 
-    l4coef = 5.0 - t2 + 9 * nu2 + 4.0 * (nu2 * nu2);
+	l4coef = 5.0 - t2 + 9 * nu2 + 4.0 * (nu2 * nu2);
 
-    l5coef = 5.0 - 18.0 * t2 + (t2 * t2) + 14.0 * nu2
-        - 58.0 * t2 * nu2;
+	l5coef = 5.0 - 18.0 * t2 + (t2 * t2) + 14.0 * nu2
+		- 58.0 * t2 * nu2;
 
-    l6coef = 61.0 - 58.0 * t2 + (t2 * t2) + 270.0 * nu2
-        - 330.0 * t2 * nu2;
+	l6coef = 61.0 - 58.0 * t2 + (t2 * t2) + 270.0 * nu2
+		- 330.0 * t2 * nu2;
 
-    l7coef = 61.0 - 479.0 * t2 + 179.0 * (t2 * t2) - (t2 * t2 * t2);
+	l7coef = 61.0 - 479.0 * t2 + 179.0 * (t2 * t2) - (t2 * t2 * t2);
 
-    l8coef = 1385.0 - 3111.0 * t2 + 543.0 * (t2 * t2) - (t2 * t2 * t2);
+	l8coef = 1385.0 - 3111.0 * t2 + 543.0 * (t2 * t2) - (t2 * t2 * t2);
 
-    /* Calculate easting (x) */
-    coord.x = N * Math.cos (phi) * l
-        + (N / 6.0 * Math.pow (Math.cos (phi),3.0) * l3coef * Math.pow (l,3.0))
-        + (N / 120.0 * Math.pow (Math.cos (phi),5.0) * l5coef * Math.pow (l,5.0))
-        + (N / 5040.0 * Math.pow (Math.cos (phi),7.0) * l7coef * Math.pow (l,7.0));
+	/* Calculate easting (x) */
+	coord.x = N * Math.cos (phi) * l
+		+ (N / 6.0 * Math.pow (Math.cos (phi),3.0) * l3coef * Math.pow (l,3.0))
+		+ (N / 120.0 * Math.pow (Math.cos (phi),5.0) * l5coef * Math.pow (l,5.0))
+		+ (N / 5040.0 * Math.pow (Math.cos (phi),7.0) * l7coef * Math.pow (l,7.0));
 
-    /* Calculate northing (y) */
-    coord.y = ArcLengthOfMeridian (phi)
-        + (t / 2.0 * N * Math.pow (Math.cos (phi),2.0) * Math.pow (l,2.0))
-        + (t / 24.0 * N * Math.pow (Math.cos (phi),4.0) * l4coef * Math.pow (l,4.0))
-        + (t / 720.0 * N * Math.pow (Math.cos (phi),6.0) * l6coef * Math.pow (l,6.0))
-        + (t / 40320.0 * N * Math.pow (Math.cos (phi),8.0) * l8coef * Math.pow (l,8.0));
+	/* Calculate northing (y) */
+	coord.y = ArcLengthOfMeridian (phi)
+		+ (t / 2.0 * N * Math.pow (Math.cos (phi),2.0) * Math.pow (l,2.0))
+		+ (t / 24.0 * N * Math.pow (Math.cos (phi),4.0) * l4coef * Math.pow (l,4.0))
+		+ (t / 720.0 * N * Math.pow (Math.cos (phi),6.0) * l6coef * Math.pow (l,6.0))
+		+ (t / 40320.0 * N * Math.pow (Math.cos (phi),8.0) * l8coef * Math.pow (l,8.0));
 
-    return coord;
+	return coord;
 }
 
 
@@ -461,88 +559,88 @@ function MapLatLonToXY (phi,lambda,lambda0)
 */
 function MapXYToLatLon (x,y,lambda0)
 {
-    var phif,Nf,Nfpow,nuf2,ep2,tf,tf2,tf4,cf;
-    var x1frac,x2frac,x3frac,x4frac,x5frac,x6frac,x7frac,x8frac;
-    var x2poly,x3poly,x4poly,x5poly,x6poly,x7poly,x8poly;
-    
-    /* Get the value of phif,the footpoint latitude. */
-    phif = FootpointLatitude (y);
-        
-    /* Precalculate ep2 */
-    ep2 = (Math.pow (sm_a,2.0) - Math.pow (sm_b,2.0))
-          / Math.pow (sm_b,2.0);
-        
-    /* Precalculate cos (phif) */
-    cf = Math.cos (phif);
-        
-    /* Precalculate nuf2 */
-    nuf2 = ep2 * Math.pow (cf,2.0);
-        
-    /* Precalculate Nf and initialize Nfpow */
-    Nf = Math.pow (sm_a,2.0) / (sm_b * Math.sqrt (1 + nuf2));
-    Nfpow = Nf;
-        
-    /* Precalculate tf */
-    tf = Math.tan (phif);
-    tf2 = tf * tf;
-    tf4 = tf2 * tf2;
-    
-    /* Precalculate fractional coefficients for x**n in the equations
-       below to simplify the expressions for latitude and longitude. */
-    x1frac = 1.0 / (Nfpow * cf);
-    
-    Nfpow *= Nf;   /* now equals Nf**2) */
-    x2frac = tf / (2.0 * Nfpow);
-    
-    Nfpow *= Nf;   /* now equals Nf**3) */
-    x3frac = 1.0 / (6.0 * Nfpow * cf);
-    
-    Nfpow *= Nf;   /* now equals Nf**4) */
-    x4frac = tf / (24.0 * Nfpow);
-    
-    Nfpow *= Nf;   /* now equals Nf**5) */
-    x5frac = 1.0 / (120.0 * Nfpow * cf);
-    
-    Nfpow *= Nf;   /* now equals Nf**6) */
-    x6frac = tf / (720.0 * Nfpow);
-    
-    Nfpow *= Nf;   /* now equals Nf**7) */
-    x7frac = 1.0 / (5040.0 * Nfpow * cf);
-    
-    Nfpow *= Nf;   /* now equals Nf**8) */
-    x8frac = tf / (40320.0 * Nfpow);
-    
-    /* Precalculate polynomial coefficients for x**n.
-       -- x**1 does not have a polynomial coefficient. */
-    x2poly = -1.0 - nuf2;
-    
-    x3poly = -1.0 - 2 * tf2 - nuf2;
-    
-    x4poly = 5.0 + 3.0 * tf2 + 6.0 * nuf2 - 6.0 * tf2 * nuf2
-        - 3.0 * (nuf2 *nuf2) - 9.0 * tf2 * (nuf2 * nuf2);
-    
-    x5poly = 5.0 + 28.0 * tf2 + 24.0 * tf4 + 6.0 * nuf2 + 8.0 * tf2 * nuf2;
-    
-    x6poly = -61.0 - 90.0 * tf2 - 45.0 * tf4 - 107.0 * nuf2
-        + 162.0 * tf2 * nuf2;
-    
-    x7poly = -61.0 - 662.0 * tf2 - 1320.0 * tf4 - 720.0 * (tf4 * tf2);
-    
-    x8poly = 1385.0 + 3633.0 * tf2 + 4095.0 * tf4 + 1575 * (tf4 * tf2);
-        
-    /* Calculate latitude */
-    philambda.lat = phif + x2frac * x2poly * (x * x)
-        + x4frac * x4poly * Math.pow (x,4.0)
-        + x6frac * x6poly * Math.pow (x,6.0)
-        + x8frac * x8poly * Math.pow (x,8.0);
-        
-    /* Calculate longitude */
-    philambda.lon = lambda0 + x1frac * x
-        + x3frac * x3poly * Math.pow (x,3.0)
-        + x5frac * x5poly * Math.pow (x,5.0)
-        + x7frac * x7poly * Math.pow (x,7.0);
-        
-    return philambda;
+	var phif,Nf,Nfpow,nuf2,ep2,tf,tf2,tf4,cf;
+	var x1frac,x2frac,x3frac,x4frac,x5frac,x6frac,x7frac,x8frac;
+	var x2poly,x3poly,x4poly,x5poly,x6poly,x7poly,x8poly;
+	
+	/* Get the value of phif,the footpoint latitude. */
+	phif = FootpointLatitude (y);
+		
+	/* Precalculate ep2 */
+	ep2 = (Math.pow (sm_a,2.0) - Math.pow (sm_b,2.0))
+		  / Math.pow (sm_b,2.0);
+		
+	/* Precalculate cos (phif) */
+	cf = Math.cos (phif);
+		
+	/* Precalculate nuf2 */
+	nuf2 = ep2 * Math.pow (cf,2.0);
+		
+	/* Precalculate Nf and initialize Nfpow */
+	Nf = Math.pow (sm_a,2.0) / (sm_b * Math.sqrt (1 + nuf2));
+	Nfpow = Nf;
+		
+	/* Precalculate tf */
+	tf = Math.tan (phif);
+	tf2 = tf * tf;
+	tf4 = tf2 * tf2;
+	
+	/* Precalculate fractional coefficients for x**n in the equations
+	   below to simplify the expressions for latitude and longitude. */
+	x1frac = 1.0 / (Nfpow * cf);
+	
+	Nfpow *= Nf;   /* now equals Nf**2) */
+	x2frac = tf / (2.0 * Nfpow);
+	
+	Nfpow *= Nf;   /* now equals Nf**3) */
+	x3frac = 1.0 / (6.0 * Nfpow * cf);
+	
+	Nfpow *= Nf;   /* now equals Nf**4) */
+	x4frac = tf / (24.0 * Nfpow);
+	
+	Nfpow *= Nf;   /* now equals Nf**5) */
+	x5frac = 1.0 / (120.0 * Nfpow * cf);
+	
+	Nfpow *= Nf;   /* now equals Nf**6) */
+	x6frac = tf / (720.0 * Nfpow);
+	
+	Nfpow *= Nf;   /* now equals Nf**7) */
+	x7frac = 1.0 / (5040.0 * Nfpow * cf);
+	
+	Nfpow *= Nf;   /* now equals Nf**8) */
+	x8frac = tf / (40320.0 * Nfpow);
+	
+	/* Precalculate polynomial coefficients for x**n.
+	   -- x**1 does not have a polynomial coefficient. */
+	x2poly = -1.0 - nuf2;
+	
+	x3poly = -1.0 - 2 * tf2 - nuf2;
+	
+	x4poly = 5.0 + 3.0 * tf2 + 6.0 * nuf2 - 6.0 * tf2 * nuf2
+		- 3.0 * (nuf2 *nuf2) - 9.0 * tf2 * (nuf2 * nuf2);
+	
+	x5poly = 5.0 + 28.0 * tf2 + 24.0 * tf4 + 6.0 * nuf2 + 8.0 * tf2 * nuf2;
+	
+	x6poly = -61.0 - 90.0 * tf2 - 45.0 * tf4 - 107.0 * nuf2
+		+ 162.0 * tf2 * nuf2;
+	
+	x7poly = -61.0 - 662.0 * tf2 - 1320.0 * tf4 - 720.0 * (tf4 * tf2);
+	
+	x8poly = 1385.0 + 3633.0 * tf2 + 4095.0 * tf4 + 1575 * (tf4 * tf2);
+		
+	/* Calculate latitude */
+	philambda.lat = phif + x2frac * x2poly * (x * x)
+		+ x4frac * x4poly * Math.pow (x,4.0)
+		+ x6frac * x6poly * Math.pow (x,6.0)
+		+ x8frac * x8poly * Math.pow (x,8.0);
+		
+	/* Calculate longitude */
+	philambda.lon = lambda0 + x1frac * x
+		+ x3frac * x3poly * Math.pow (x,3.0)
+		+ x5frac * x5poly * Math.pow (x,5.0)
+		+ x7frac * x7poly * Math.pow (x,7.0);
+		
+	return philambda;
 }
 
 
@@ -572,13 +670,13 @@ function LatLonToUTMXY (lat,lon,zone)
 {
 	var coord = MapLatLonToXY (lat,lon,UTMCentralMeridian (zone));
 
-    /* Adjust easting and northing for UTM system. */
-    coord.x = coord.x * UTMScaleFactor + 500000.0;
-    coord.y = coord.y * UTMScaleFactor;
-    if (coord.y < 0.0)
-        coord.y = coord.y + 10000000.0;
+	/* Adjust easting and northing for UTM system. */
+	coord.x = coord.x * UTMScaleFactor + 500000.0;
+	coord.y = coord.y * UTMScaleFactor;
+	if (coord.y < 0.0)
+		coord.y = coord.y + 10000000.0;
 
-    return coord;
+	return coord;
 }
 
 
@@ -606,19 +704,19 @@ function LatLonToUTMXY (lat,lon,zone)
 */
 function UTMXYToLatLon (x,y,zone,southhemi)
 {
-    var cmeridian;
-        
-    x -= 500000.0;
-    x /= UTMScaleFactor;
-        
-    /* If in southern hemisphere,adjust y accordingly. */
-    if (southhemi)
-    y -= 10000000.0;
-            
-    y /= UTMScaleFactor;
-    
-    cmeridian = UTMCentralMeridian (zone);
-    return MapXYToLatLon (x,y,cmeridian);
+	var cmeridian;
+		
+	x -= 500000.0;
+	x /= UTMScaleFactor;
+		
+	/* If in southern hemisphere,adjust y accordingly. */
+	if (southhemi)
+	y -= 10000000.0;
+			
+	y /= UTMScaleFactor;
+	
+	cmeridian = UTMCentralMeridian (zone);
+	return MapXYToLatLon (x,y,cmeridian);
 }
 
 
@@ -674,7 +772,7 @@ function LatLonDegToUTMXY (lat,lon,zone)
 */
 function UTMXYToLatLonDeg (x,y,zone,southhemi)
 {
-    var coord = UTMXYToLatLon(x,y,zone,southhemi);
-    
-    return {lat: RadToDeg(coord.lat), lon: RadToDeg(coord.lon)};
+	var coord = UTMXYToLatLon(x,y,zone,southhemi);
+	
+	return {lat: RadToDeg(coord.lat), lon: RadToDeg(coord.lon)};
 }
