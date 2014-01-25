@@ -50,6 +50,23 @@ function createEnvlopeString(x, y, delta){
 	                      ymax: y + delta});
 }
 
+function stopDistanceSort(stops, location){
+	// Create Distance Map
+	var map = stops.map(function(e, i){
+	  return {index: i, value: Math.sqrt(Math.pow(e.geometry.x - location.x, 2) + Math.pow(e.geometry.y - location.y, 2))}
+	})
+
+	// Sort the Map
+	map.sort(function(a, b) {
+	  return a.value - b.value;
+	});
+
+	// Map the Stops to the Map
+	return map.map(function(e){
+	  return stops[e.index]
+	})
+}
+
 Pebble.addEventListener("ready",
 	function(e) {
 		console.log("MetroGnome Started");
@@ -102,7 +119,7 @@ function fetchNearestStops(CoordUTM){
 			}
 
 			try{
-				var stops = response.features;
+				var stops = stopDistanceSort(response.features, CoordUTM);
 			}catch(e){
 				console.warn("No Stops Returned");
 				console.warn(e);
