@@ -1,7 +1,7 @@
 var geo_options = {
 	enableHighAccuracy: false,
 	maximumAge        : 30000,
-	timeout           : 2000
+	timeout           : Infinity
 };
 
 var wpid,favorite_stops;
@@ -16,11 +16,12 @@ if (!String.prototype.trim) {
 
 function geo_success(position, callback) {
 	console.log("GeoLocation Position: " + position.coords.latitude + "," + position.coords.longitude);
-	lastGeo = LatLonDegToUTMXY(position.coords.latitude,position.coords.longitude, 15)
-	console.log("X: " + lastGeo.x + " Y: " + lastGeo.y)
+	lastGeo = LatLonDegToUTMXY(position.coords.latitude,position.coords.longitude, 15);
+	lastGeo.accuracy = position.coords.accuracy
+	console.log("X: " + lastGeo.x + " Y: " + lastGeo.y + " A: " + lastGeo.accuracy)
 
-	if(callback !== undefined){
-		callback(position)
+	if(callback && typeof(callback) === "function") {
+		callback(position);
 	}
 }
 
@@ -53,12 +54,10 @@ Pebble.addEventListener("ready",
 	function(e) {
 		console.log("MetroGnome Started");
 
-		console.log("Starting GPS Watch Position");	
-
 		if ("geolocation" in navigator) {
 			wpid = navigator.geolocation.getCurrentPosition(geo_success,geo_error,geo_options);
 		} else {
-			console.log("Geolocation Not Availalbe");
+			console.Error("Geolocation Not Availalbe");
 			Pebble.sendAppMessage({ "statusMessage": "Geolocation Not Available" });
 		}
 
@@ -80,7 +79,7 @@ function fetchNearestStops(CoordUTM){
 	var baseUrl = "https://arcgis.metc.state.mn.us/arcgis/rest/services/transit/TIM_Points/MapServer/1/query?"
 
 	var parameters = {};
-	parameters["geometry"] = createEnvlopeString(CoordUTM.x, CoordUTM.y, 100);
+	parameters["geometry"] = createEnvlopeString(CoordUTM.x, CoordUTM.y, CoordUTM.accuracy + 100);
 	parameters["geometryType"] = "esriGeometryEnvelope";
 	parameters["geometryPrecision"] = 0;
 	parameters["outFields"] = "site_on,site_at,site_id,ROUTES,CORN_DESC,ROUTEDIRS";
@@ -203,9 +202,56 @@ Pebble.addEventListener("appmessage",
 			console.log("Get Stops: " + e.payload.getStops);
 
 			if(e.payload.getStops === 0){
-				var stops = fetchNearestStops(lastGeo);
-				sendStopLocation(stops);
+				//Get Location and Send Callback Function to Fetch Stops Send to Watch
+
+				if ("geolocation" in navigator) {
+					Pebble.sendAppMessage({ "getStops": 0,
+					                        "loadingMessage": "Finding Your Location" });
+
+					wpid = navigator.geolocation.getCurrentPosition(
+						function(position){
+							var thisGeo = LatLonDegToUTMXY(
+								position.coords.latitude,
+								position.coords.longitude,
+								15);
+							thisGeo.accuracy = position.coords.accuracy
+
+							Pebble.sendAppMessage({ "getStops": 0,
+							                        "loadingMessage": "Fetching Stops" });
+
+							var stops = fetchNearestStops(thisGeo);
+							sendStopLocation(stops);
+						},
+						function(posErr){
+							var msg;
+
+							switch(posErr.code){
+								case PERMISSION_DENIED:
+									msg = "Geo Permission Denied";
+									break;
+								case POSITION_UNAVAILALBLE:
+									msg = "Geo Permission Unavailable";
+									break;
+								case TIMEOUT:
+									msg = "Geo Locate Timeout";
+									break;
+								default:
+									msg = "Geo Error Unknown";
+									break;
+							}
+							Pebble.sendAppMessage({ "getStops": 0,
+							                        "errorMessage": "Geolocation Not Available" });
+						},
+						geo_options);
+				} else {
+					console.Error("Geolocation Not Availalbe");
+					Pebble.sendAppMessage({ "getStops": 0,
+					                        "errorMessage": "Geolocation Not Available" });
+				}
 			}else if(e.payload.getStops === 1){
+				Pebble.sendAppMessage({ "getStops": 0,
+				                        "loadingMessage": "Fetching Stops" });
+
 				var stops = fetchFavoriteStops(favorite_stops);
 				sendStopLocation(stops);
 			}
@@ -213,6 +259,9 @@ Pebble.addEventListener("appmessage",
 
 		if(e.payload.getStopTimes !== undefined){
 			console.log("Get Stop Times: " + e.payload.getStopTimes);
+
+			Pebble.sendAppMessage({ "getStopTimes": 0,
+			                        "loadingMessage": "Fetching Times" });
 
 			var stopNumber = e.payload.getStopTimes;
 			var stopTimes = fetchStopTimes(stopNumber)
@@ -305,6 +354,8 @@ function sendStopLocationContinue(data){
 function sendStopLocationError(data){
 	//data.transactionId
 	console.error("Couldn't Send Stops, Failing")
+	Pebble.sendAppMessage({ "getStops": 0,
+	                        "errorMessage": "Couldn't Send Stops" });
 }
 
 var numTimesSent = 0;
@@ -354,6 +405,8 @@ function sendStopTimeContinue(data){
 function sendStopTimeError(data){
 	//data.transactionId
 	console.error("Couldn't Send Times, Failing")
+	Pebble.sendAppMessage({ "getStopTimes": 0,
+	                        "errorMessage": "Couldn't Send Times" });
 }
 
 function isInNum(name, container){

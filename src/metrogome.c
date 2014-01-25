@@ -68,6 +68,8 @@ static void log_msg_error(AppMessageResult ret){
 //////////////////////////////////////////////////////////////////////
 enum {
 	STATUS_MESSAGE = 0,
+	LOADING_MESSAGE = 1,
+	ERROR_MESSAGE = 2,
 
 	GET_STOPS = 10,
 	LIST_STOPS_RESET = 11,
@@ -264,6 +266,18 @@ static void stops_append_location(int site_id, char* location, char* routes, boo
 	menu_layer_reload_data(stops_menu_layer); 
 }
 
+static void stops_set_status(char* title, char* subtitle) {
+	stop_list_count = 0;
+
+	strncpy(stop_list_items[stop_list_count].location, title, MAX_STOP_LOCATION_LENGTH);
+	strncpy(stop_list_items[stop_list_count].routes, subtitle, MAX_STOP_ROUTES_LENGTH);
+	stop_list_items[stop_list_count++].is_favorite = false;
+
+
+	num_stops_menu_items[0] = 1;
+	menu_layer_reload_data(stops_menu_layer); 
+}
+
 static void handle_stops_message(DictionaryIterator* received){
 	// Check for fields you expect to receive
 	Tuple *reset_tuple = dict_find(received, LIST_STOPS_RESET);
@@ -271,6 +285,9 @@ static void handle_stops_message(DictionaryIterator* received){
 	Tuple *location_tuple = dict_find(received, LIST_STOPS_LOCATION);
 	Tuple *routes_tuple = dict_find(received, LIST_STOPS_ROUTES);
 	Tuple *is_favorite_tuple = dict_find(received, LIST_STOPS_IS_FAVORITE);
+	Tuple *status_msg_tuple = dict_find(received, STATUS_MESSAGE);
+	Tuple *loading_msg_tuple = dict_find(received, LOADING_MESSAGE);
+	Tuple *err_msg_tuple = dict_find(received, ERROR_MESSAGE);
 
 	if (reset_tuple) {
 		stop_list_count = 0;
@@ -279,6 +296,12 @@ static void handle_stops_message(DictionaryIterator* received){
 													location_tuple->value->cstring,
 													routes_tuple->value->cstring,
 													is_favorite_tuple->value->int8);
+	}else if (loading_msg_tuple) {
+		stops_set_status("Please Wait",
+		                 loading_msg_tuple->value->cstring);
+	}else if (err_msg_tuple) {
+		stops_set_status("Error",
+		                 err_msg_tuple->value->cstring);
 	}else{
 		// Check for unexpected fields.
 		Tuple* message_tuple = dict_read_first(received);
@@ -499,11 +522,24 @@ static void times_append_depart(int block, char *route, char *depart) {
 	menu_layer_reload_data(times_menu_layer); 
 }
 
+static void times_set_status(char *title, char *subtitle) {
+	time_list_count = 0;
+
+	strncpy(time_list_items[time_list_count].route, title, MAX_TIME_ROUTE_LENGTH);
+	strncpy(time_list_items[time_list_count].depart, subtitle, MAX_TIME_ROUTE_LENGTH);
+
+	num_times_menu_items[0] = 1;
+	menu_layer_reload_data(times_menu_layer); 
+}
+
 static void handle_times_message(DictionaryIterator *received){
 	Tuple *reset_tuple = dict_find(received, LIST_STOP_TIMES_RESET);
 	Tuple *block_tuple = dict_find(received, LIST_STOP_TIMES_BLOCK);
 	Tuple *route_tuple = dict_find(received, LIST_STOP_TIMES_ROUTE);
 	Tuple *depart_tuple = dict_find(received, LIST_STOP_TIMES_DEPART);
+	Tuple *status_msg_tuple = dict_find(received, STATUS_MESSAGE);
+	Tuple *loading_msg_tuple = dict_find(received, LOADING_MESSAGE);
+	Tuple *err_msg_tuple = dict_find(received, ERROR_MESSAGE);
 
 	// If message is a grouping, let it be handled by custom handler.
 	if (reset_tuple) {
@@ -513,6 +549,12 @@ static void handle_times_message(DictionaryIterator *received){
 		times_append_depart(block_tuple->value->int32,
 												route_tuple->value->cstring,
 												depart_tuple->value->cstring);
+	}else if (loading_msg_tuple) {
+		times_set_status("Please Wait",
+		                 loading_msg_tuple->value->cstring);
+	}else if (err_msg_tuple) {
+		times_set_status("Error",
+		                 err_msg_tuple->value->cstring);
 	}else{
 		// Check for unexpected fields.
 		Tuple* message_tuple = dict_read_first(received);

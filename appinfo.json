@@ -10,6 +10,8 @@
   },
   "appKeys": {
     "statusMessage": 0,
+    "loadingMessage": 1,
+    "errorMessage": 2,
 
     "getStops": 10,
     "listStopsReset": 11,
